@@ -16,6 +16,7 @@
 
 package android.support.v4.view;
 
+import android.annotation.TargetApi;
 import android.content.Context;
 import android.content.res.Resources;
 import android.content.res.TypedArray;
@@ -30,10 +31,6 @@ import android.os.Parcelable;
 import android.os.SystemClock;
 import android.support.v4.os.ParcelableCompat;
 import android.support.v4.os.ParcelableCompatCreatorCallbacks;
-import android.support.v4.view.accessibility.AccessibilityEventCompat;
-import android.support.v4.view.accessibility.AccessibilityNodeInfoCompat;
-import android.support.v4.view.accessibility.AccessibilityRecordCompat;
-import android.support.v4.widget.EdgeEffectCompat;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.FocusFinder;
@@ -46,8 +43,11 @@ import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.ViewParent;
+import android.view.WindowInsets;
 import android.view.accessibility.AccessibilityEvent;
+import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.animation.Interpolator;
+import android.widget.EdgeEffect;
 import android.widget.Scroller;
 
 import java.lang.reflect.Method;
@@ -208,8 +208,8 @@ public class ViewPager extends ViewGroup {
     private boolean mFakeDragging;
     private long mFakeDragBeginTime;
 
-    private EdgeEffectCompat mLeftEdge;
-    private EdgeEffectCompat mRightEdge;
+    private EdgeEffect mLeftEdge;
+    private EdgeEffect mRightEdge;
 
     private boolean mFirstLayout = true;
     private boolean mNeedCalculatePageOffsets = false;
@@ -367,72 +367,71 @@ public class ViewPager extends ViewGroup {
         final ViewConfiguration configuration = ViewConfiguration.get(context);
         final float density = context.getResources().getDisplayMetrics().density;
 
-        mTouchSlop = ViewConfigurationCompat.getScaledPagingTouchSlop(configuration);
+        mTouchSlop = configuration.getScaledPagingTouchSlop();
         mMinimumVelocity = (int) (MIN_FLING_VELOCITY * density);
         mMaximumVelocity = configuration.getScaledMaximumFlingVelocity();
-        mLeftEdge = new EdgeEffectCompat(context);
-        mRightEdge = new EdgeEffectCompat(context);
+        mLeftEdge = new EdgeEffect(context);
+        mRightEdge = new EdgeEffect(context);
 
         mFlingDistance = (int) (MIN_DISTANCE_FOR_FLING * density);
         mCloseEnough = (int) (CLOSE_ENOUGH * density);
         mDefaultGutterSize = (int) (DEFAULT_GUTTER_SIZE * density);
+        setAccessibilityDelegate(new MyAccessibilityDelegate());
 
-        ViewCompat.setAccessibilityDelegate(this, new MyAccessibilityDelegate());
+        if (getImportantForAccessibility()
+                == IMPORTANT_FOR_ACCESSIBILITY_AUTO) {
+            setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH) {
+            setOnApplyWindowInsetsListener(new OnApplyWindowInsetsListener() {
+                private final Rect mTempRect = new Rect();
 
-        if (ViewCompat.getImportantForAccessibility(this)
-                == ViewCompat.IMPORTANT_FOR_ACCESSIBILITY_AUTO) {
-            ViewCompat.setImportantForAccessibility(this,
-                    ViewCompat.IMPORTANT_FOR_ACCESSIBILITY_YES);
+                @TargetApi(Build.VERSION_CODES.LOLLIPOP)
+                @Override
+                public WindowInsets onApplyWindowInsets(View view, WindowInsets windowInsets) {
+                    // First let the ViewPager itself try and consume them...
+                    final WindowInsets applied;
+                    applied = view.onApplyWindowInsets(windowInsets);
+                    if (applied.isConsumed()) {
+                        // If the ViewPager consumed all insets, return now
+                        return applied;
+                    }
+                    // Now we'll manually dispatch the insets to our children. Since ViewPager
+                    // children are always full-height, we do not want to use the standard
+                    // ViewGroup dispatchApplyWindowInsets since if child 0 consumes them,
+                    // the rest of the children will not receive any insets. To workaround this
+                    // we manually dispatch the applied insets, not allowing children to
+                    // consume them from each other. We do however keep track of any insets
+                    // which are consumed, returning the union of our children's consumption
+                    final Rect res = mTempRect;
+                    res.left = applied.getSystemWindowInsetLeft();
+                    res.top = applied.getSystemWindowInsetTop();
+                    res.right = applied.getSystemWindowInsetRight();
+                    res.bottom = applied.getSystemWindowInsetBottom();
+
+                    for (int i = 0, count = getChildCount(); i < count; i++) {
+                        final WindowInsets childInsets = getChildAt(i).dispatchApplyWindowInsets(applied);
+                        // Now keep track of any consumed by tracking each dimension's min
+                        // value
+                        res.left = Math.min(childInsets.getSystemWindowInsetLeft(),
+                                res.left);
+                        res.top = Math.min(childInsets.getSystemWindowInsetTop(),
+                                res.top);
+                        res.right = Math.min(childInsets.getSystemWindowInsetRight(),
+                                res.right);
+                        res.bottom = Math.min(childInsets.getSystemWindowInsetBottom(),
+                                res.bottom);
+                    }
+
+                    // Now return a new WindowInsets, using the consumed window insets
+                    return applied.replaceSystemWindowInsets(
+                            res.left, res.top, res.right, res.bottom);
+                }
+
+
+            });
         }
 
-        ViewCompat.setOnApplyWindowInsetsListener(this,
-                new android.support.v4.view.OnApplyWindowInsetsListener() {
-                    private final Rect mTempRect = new Rect();
-
-                    @Override
-                    public WindowInsetsCompat onApplyWindowInsets(final View v,
-                            final WindowInsetsCompat originalInsets) {
-                        // First let the ViewPager itself try and consume them...
-                        final WindowInsetsCompat applied =
-                                ViewCompat.onApplyWindowInsets(v, originalInsets);
-                        if (applied.isConsumed()) {
-                            // If the ViewPager consumed all insets, return now
-                            return applied;
-                        }
-
-                        // Now we'll manually dispatch the insets to our children. Since ViewPager
-                        // children are always full-height, we do not want to use the standard
-                        // ViewGroup dispatchApplyWindowInsets since if child 0 consumes them,
-                        // the rest of the children will not receive any insets. To workaround this
-                        // we manually dispatch the applied insets, not allowing children to
-                        // consume them from each other. We do however keep track of any insets
-                        // which are consumed, returning the union of our children's consumption
-                        final Rect res = mTempRect;
-                        res.left = applied.getSystemWindowInsetLeft();
-                        res.top = applied.getSystemWindowInsetTop();
-                        res.right = applied.getSystemWindowInsetRight();
-                        res.bottom = applied.getSystemWindowInsetBottom();
-
-                        for (int i = 0, count = getChildCount(); i < count; i++) {
-                            final WindowInsetsCompat childInsets = ViewCompat
-                                    .dispatchApplyWindowInsets(getChildAt(i), applied);
-                            // Now keep track of any consumed by tracking each dimension's min
-                            // value
-                            res.left = Math.min(childInsets.getSystemWindowInsetLeft(),
-                                    res.left);
-                            res.top = Math.min(childInsets.getSystemWindowInsetTop(),
-                                    res.top);
-                            res.right = Math.min(childInsets.getSystemWindowInsetRight(),
-                                    res.right);
-                            res.bottom = Math.min(childInsets.getSystemWindowInsetBottom(),
-                                    res.bottom);
-                        }
-
-                        // Now return a new WindowInsets, using the consumed window insets
-                        return applied.replaceSystemWindowInsets(
-                                res.left, res.top, res.right, res.bottom);
-                    }
-                });
     }
 
     @Override
@@ -932,7 +931,7 @@ public class ViewPager extends ViewGroup {
         // where we call computeScrollOffset().
         mIsScrollStarted = false;
         mScroller.startScroll(sx, sy, dx, dy, duration);
-        ViewCompat.postInvalidateOnAnimation(this);
+        postInvalidateOnAnimation();
     }
 
     ItemInfo addNewItem(int position, int index) {
@@ -1724,7 +1723,7 @@ public class ViewPager extends ViewGroup {
             }
 
             // Keep on drawing until the animation has finished.
-            ViewCompat.postInvalidateOnAnimation(this);
+            postInvalidateOnAnimation();
             return;
         }
 
@@ -1912,7 +1911,7 @@ public class ViewPager extends ViewGroup {
         }
         if (needPopulate) {
             if (postEvents) {
-                ViewCompat.postOnAnimation(this, mEndScrollRunnable);
+                postOnAnimation(mEndScrollRunnable);
             } else {
                 mEndScrollRunnable.run();
             }
@@ -1927,8 +1926,8 @@ public class ViewPager extends ViewGroup {
         final int childCount = getChildCount();
         for (int i = 0; i < childCount; i++) {
             final int layerType = enable ?
-                    ViewCompat.LAYER_TYPE_HARDWARE : ViewCompat.LAYER_TYPE_NONE;
-            ViewCompat.setLayerType(getChildAt(i), layerType, null);
+                    LAYER_TYPE_HARDWARE : LAYER_TYPE_NONE;
+            getChildAt(i).setLayerType(layerType,null);
         }
     }
 
@@ -1940,7 +1939,7 @@ public class ViewPager extends ViewGroup {
          * scrolling there.
          */
 
-        final int action = ev.getAction() & MotionEventCompat.ACTION_MASK;
+        final int action = ev.getAction() & MotionEvent.ACTION_MASK;
 
         // Always take care of the touch gesture being complete.
         if (action == MotionEvent.ACTION_CANCEL || action == MotionEvent.ACTION_UP) {
@@ -1980,11 +1979,11 @@ public class ViewPager extends ViewGroup {
                     break;
                 }
 
-                final int pointerIndex = MotionEventCompat.findPointerIndex(ev, activePointerId);
-                final float x = MotionEventCompat.getX(ev, pointerIndex);
+                final int pointerIndex = ev.findPointerIndex( activePointerId);
+                final float x = ev.getX(pointerIndex);
                 final float dx = x - mLastMotionX;
                 final float xDiff = Math.abs(dx);
-                final float y = MotionEventCompat.getY(ev, pointerIndex);
+                final float y = ev.getY(pointerIndex);
                 final float yDiff = Math.abs(y - mInitialMotionY);
                 if (DEBUG) Log.v(TAG, "Moved x to " + x + "," + y + " diff=" + xDiff + "," + yDiff);
 
@@ -2016,7 +2015,7 @@ public class ViewPager extends ViewGroup {
                 if (mIsBeingDragged) {
                     // Scroll to follow the motion event
                     if (performDrag(x)) {
-                        ViewCompat.postInvalidateOnAnimation(this);
+                        postInvalidateOnAnimation();
                     }
                 }
                 break;
@@ -2029,7 +2028,7 @@ public class ViewPager extends ViewGroup {
                  */
                 mLastMotionX = mInitialMotionX = ev.getX();
                 mLastMotionY = mInitialMotionY = ev.getY();
-                mActivePointerId = MotionEventCompat.getPointerId(ev, 0);
+                mActivePointerId = ev.getPointerId(0);
                 mIsUnableToDrag = false;
 
                 mIsScrollStarted = true;
@@ -2054,7 +2053,7 @@ public class ViewPager extends ViewGroup {
                 break;
             }
 
-            case MotionEventCompat.ACTION_POINTER_UP:
+            case MotionEvent.ACTION_POINTER_UP:
                 onSecondaryPointerUp(ev);
                 break;
         }
@@ -2099,7 +2098,7 @@ public class ViewPager extends ViewGroup {
         final int action = ev.getAction();
         boolean needsInvalidate = false;
 
-        switch (action & MotionEventCompat.ACTION_MASK) {
+        switch (action & MotionEvent.ACTION_MASK) {
             case MotionEvent.ACTION_DOWN: {
                 mScroller.abortAnimation();
                 mPopulatePending = false;
@@ -2108,20 +2107,20 @@ public class ViewPager extends ViewGroup {
                 // Remember where the motion event started
                 mLastMotionX = mInitialMotionX = ev.getX();
                 mLastMotionY = mInitialMotionY = ev.getY();
-                mActivePointerId = MotionEventCompat.getPointerId(ev, 0);
+                mActivePointerId = ev.getPointerId(0);
                 break;
             }
             case MotionEvent.ACTION_MOVE:
                 if (!mIsBeingDragged) {
-                    final int pointerIndex = MotionEventCompat.findPointerIndex(ev, mActivePointerId);
+                    final int pointerIndex = ev.findPointerIndex(mActivePointerId);
                     if (pointerIndex == -1) {
                         // A child has consumed some touch events and put us into an inconsistent state.
                         needsInvalidate = resetTouch();
                         break;
                     }
-                    final float x = MotionEventCompat.getX(ev, pointerIndex);
+                    final float x = ev.getX(pointerIndex);
                     final float xDiff = Math.abs(x - mLastMotionX);
-                    final float y = MotionEventCompat.getY(ev, pointerIndex);
+                    final float y = ev.getY(pointerIndex);
                     final float yDiff = Math.abs(y - mLastMotionY);
                     if (DEBUG) Log.v(TAG, "Moved x to " + x + "," + y + " diff=" + xDiff + "," + yDiff);
                     if (xDiff > mTouchSlop && xDiff > yDiff) {
@@ -2144,9 +2143,8 @@ public class ViewPager extends ViewGroup {
                 // Not else! Note that mIsBeingDragged can be set above.
                 if (mIsBeingDragged) {
                     // Scroll to follow the motion event
-                    final int activePointerIndex = MotionEventCompat.findPointerIndex(
-                            ev, mActivePointerId);
-                    final float x = MotionEventCompat.getX(ev, activePointerIndex);
+                    final int activePointerIndex = ev.findPointerIndex(mActivePointerId);
+                    final float x = ev.getX(activePointerIndex);
                     needsInvalidate |= performDrag(x);
                 }
                 break;
@@ -2154,8 +2152,7 @@ public class ViewPager extends ViewGroup {
                 if (mIsBeingDragged) {
                     final VelocityTracker velocityTracker = mVelocityTracker;
                     velocityTracker.computeCurrentVelocity(1000, mMaximumVelocity);
-                    int initialVelocity = (int) VelocityTrackerCompat.getXVelocity(
-                            velocityTracker, mActivePointerId);
+                    int initialVelocity = (int) velocityTracker.getXVelocity(mActivePointerId);
                     mPopulatePending = true;
                     final int width = getClientWidth();
                     final int scrollX = getScrollX();
@@ -2163,8 +2160,8 @@ public class ViewPager extends ViewGroup {
                     final int currentPage = ii.position;
                     final float pageOffset = (((float) scrollX / width) - ii.offset) / ii.widthFactor;
                     final int activePointerIndex =
-                            MotionEventCompat.findPointerIndex(ev, mActivePointerId);
-                    final float x = MotionEventCompat.getX(ev, activePointerIndex);
+                            ev.findPointerIndex(mActivePointerId);
+                    final float x = ev.getX(activePointerIndex);
                     final int totalDelta = (int) (x - mInitialMotionX);
                     int nextPage = determineTargetPage(currentPage, pageOffset, initialVelocity,
                             totalDelta);
@@ -2179,21 +2176,20 @@ public class ViewPager extends ViewGroup {
                     needsInvalidate = resetTouch();
                 }
                 break;
-            case MotionEventCompat.ACTION_POINTER_DOWN: {
-                final int index = MotionEventCompat.getActionIndex(ev);
-                final float x = MotionEventCompat.getX(ev, index);
+            case MotionEvent.ACTION_POINTER_DOWN: {
+                final int index =ev.getActionIndex();
+                final float x = ev.getX(index);
                 mLastMotionX = x;
-                mActivePointerId = MotionEventCompat.getPointerId(ev, index);
+                mActivePointerId = ev.getPointerId(index);
                 break;
             }
-            case MotionEventCompat.ACTION_POINTER_UP:
+            case MotionEvent.ACTION_POINTER_UP:
                 onSecondaryPointerUp(ev);
-                mLastMotionX = MotionEventCompat.getX(ev,
-                        MotionEventCompat.findPointerIndex(ev, mActivePointerId));
+                mLastMotionX = ev.getX(ev.findPointerIndex( mActivePointerId));
                 break;
         }
         if (needsInvalidate) {
-            ViewCompat.postInvalidateOnAnimation(this);
+            postInvalidateOnAnimation();
         }
         return true;
     }
@@ -2202,7 +2198,11 @@ public class ViewPager extends ViewGroup {
         boolean needsInvalidate;
         mActivePointerId = INVALID_POINTER;
         endDrag();
-        needsInvalidate = mLeftEdge.onRelease() | mRightEdge.onRelease();
+        mLeftEdge.onRelease();
+        boolean mLeftIsfinished = mLeftEdge.isFinished();
+        mRightEdge.onRelease();
+        boolean mRightEdgeFinished = mRightEdge.isFinished();
+        needsInvalidate = mLeftIsfinished | mRightEdgeFinished;
         return needsInvalidate;
     }
 
@@ -2242,13 +2242,15 @@ public class ViewPager extends ViewGroup {
         if (scrollX < leftBound) {
             if (leftAbsolute) {
                 float over = leftBound - scrollX;
-                needsInvalidate = mLeftEdge.onPull(Math.abs(over) / width);
+                mLeftEdge.onPull(Math.abs(over) / width);
+                needsInvalidate =true;
             }
             scrollX = leftBound;
         } else if (scrollX > rightBound) {
             if (rightAbsolute) {
                 float over = scrollX - rightBound;
-                needsInvalidate = mRightEdge.onPull(Math.abs(over) / width);
+                mRightEdge.onPull(Math.abs(over) / width);
+                needsInvalidate =true;
             }
             scrollX = rightBound;
         }
@@ -2331,9 +2333,9 @@ public class ViewPager extends ViewGroup {
         super.draw(canvas);
         boolean needsInvalidate = false;
 
-        final int overScrollMode = ViewCompat.getOverScrollMode(this);
-        if (overScrollMode == ViewCompat.OVER_SCROLL_ALWAYS ||
-                (overScrollMode == ViewCompat.OVER_SCROLL_IF_CONTENT_SCROLLS &&
+        final int overScrollMode = getOverScrollMode();;
+        if (overScrollMode == OVER_SCROLL_ALWAYS ||
+                (overScrollMode == OVER_SCROLL_IF_CONTENT_SCROLLS &&
                         mAdapter != null && mAdapter.getCount() > 1)) {
             if (!mLeftEdge.isFinished()) {
                 final int restoreCount = canvas.save();
@@ -2364,7 +2366,7 @@ public class ViewPager extends ViewGroup {
 
         if (needsInvalidate) {
             // Keep animating
-            ViewCompat.postInvalidateOnAnimation(this);
+            postInvalidateOnAnimation();
         }
     }
 
@@ -2463,8 +2465,7 @@ public class ViewPager extends ViewGroup {
         if (mAdapter != null) {
             final VelocityTracker velocityTracker = mVelocityTracker;
             velocityTracker.computeCurrentVelocity(1000, mMaximumVelocity);
-            int initialVelocity = (int) VelocityTrackerCompat.getXVelocity(
-                    velocityTracker, mActivePointerId);
+            int initialVelocity = (int) velocityTracker.getXVelocity(mActivePointerId);
             mPopulatePending = true;
             final int width = getClientWidth();
             final int scrollX = getScrollX();
@@ -2547,14 +2548,14 @@ public class ViewPager extends ViewGroup {
     }
 
     private void onSecondaryPointerUp(MotionEvent ev) {
-        final int pointerIndex = MotionEventCompat.getActionIndex(ev);
-        final int pointerId = MotionEventCompat.getPointerId(ev, pointerIndex);
+        final int pointerIndex = ev.getActionIndex();
+        final int pointerId = ev.getPointerId(pointerIndex);
         if (pointerId == mActivePointerId) {
             // This was our active pointer going up. Choose a new
             // active pointer and adjust accordingly.
             final int newPointerIndex = pointerIndex == 0 ? 1 : 0;
-            mLastMotionX = MotionEventCompat.getX(ev, newPointerIndex);
-            mActivePointerId = MotionEventCompat.getPointerId(ev, newPointerIndex);
+            mLastMotionX = ev.getX(newPointerIndex);
+            mActivePointerId = ev.getPointerId(newPointerIndex);
             if (mVelocityTracker != null) {
                 mVelocityTracker.clear();
             }
@@ -2633,7 +2634,7 @@ public class ViewPager extends ViewGroup {
             }
         }
 
-        return checkV && ViewCompat.canScrollHorizontally(v, -dx);
+        return checkV && v.canScrollHorizontally(-dx);
     }
 
     @Override
@@ -2664,9 +2665,9 @@ public class ViewPager extends ViewGroup {
                     if (Build.VERSION.SDK_INT >= 11) {
                         // The focus finder had a bug handling FOCUS_FORWARD and FOCUS_BACKWARD
                         // before Android 3.0. Ignore the tab key on those devices.
-                        if (KeyEventCompat.hasNoModifiers(event)) {
+                        if (event.hasNoModifiers()) {
                             handled = arrowScroll(FOCUS_FORWARD);
-                        } else if (KeyEventCompat.hasModifiers(event, KeyEvent.META_SHIFT_ON)) {
+                        } else if (event.hasModifiers(KeyEvent.META_SHIFT_ON)) {
                             handled = arrowScroll(FOCUS_BACKWARD);
                         }
                     }
@@ -2883,7 +2884,7 @@ public class ViewPager extends ViewGroup {
     @Override
     public boolean dispatchPopulateAccessibilityEvent(AccessibilityEvent event) {
         // Dispatch scroll events from this ViewPager.
-        if (event.getEventType() == AccessibilityEventCompat.TYPE_VIEW_SCROLLED) {
+        if (event.getEventType() == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
             return super.dispatchPopulateAccessibilityEvent(event);
         }
 
@@ -2923,35 +2924,21 @@ public class ViewPager extends ViewGroup {
         return new LayoutParams(getContext(), attrs);
     }
 
-    class MyAccessibilityDelegate extends AccessibilityDelegateCompat {
+    class MyAccessibilityDelegate extends AccessibilityDelegate {
 
         @Override
         public void onInitializeAccessibilityEvent(View host, AccessibilityEvent event) {
             super.onInitializeAccessibilityEvent(host, event);
             event.setClassName(ViewPager.class.getName());
-            final AccessibilityRecordCompat recordCompat =
-                    AccessibilityEventCompat.asRecord(event);
-            recordCompat.setScrollable(canScroll());
-            if (event.getEventType() == AccessibilityEventCompat.TYPE_VIEW_SCROLLED
+            event.setScrollable(canScroll());
+            if (event.getEventType() == AccessibilityEvent.TYPE_VIEW_SCROLLED
                     && mAdapter != null) {
-                recordCompat.setItemCount(mAdapter.getCount());
-                recordCompat.setFromIndex(mCurItem);
-                recordCompat.setToIndex(mCurItem);
+                event.setItemCount(mAdapter.getCount());
+                event.setFromIndex(mCurItem);
+                event.setToIndex(mCurItem);
             }
         }
 
-        @Override
-        public void onInitializeAccessibilityNodeInfo(View host, AccessibilityNodeInfoCompat info) {
-            super.onInitializeAccessibilityNodeInfo(host, info);
-            info.setClassName(ViewPager.class.getName());
-            info.setScrollable(canScroll());
-            if (canScrollHorizontally(1)) {
-                info.addAction(AccessibilityNodeInfoCompat.ACTION_SCROLL_FORWARD);
-            }
-            if (canScrollHorizontally(-1)) {
-                info.addAction(AccessibilityNodeInfoCompat.ACTION_SCROLL_BACKWARD);
-            }
-        }
 
         @Override
         public boolean performAccessibilityAction(View host, int action, Bundle args) {
@@ -2959,13 +2946,13 @@ public class ViewPager extends ViewGroup {
                 return true;
             }
             switch (action) {
-                case AccessibilityNodeInfoCompat.ACTION_SCROLL_FORWARD: {
+                case AccessibilityNodeInfo.ACTION_SCROLL_FORWARD: {
                     if (canScrollHorizontally(1)) {
                         setCurrentItem(mCurItem + 1);
                         return true;
                     }
                 } return false;
-                case AccessibilityNodeInfoCompat.ACTION_SCROLL_BACKWARD: {
+                case AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD: {
                     if (canScrollHorizontally(-1)) {
                         setCurrentItem(mCurItem - 1);
                         return true;
