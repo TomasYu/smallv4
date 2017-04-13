@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package android.support.v4.app;
+package android.support.v4.view;
 
 import android.app.Fragment;
 import android.app.FragmentManager;
